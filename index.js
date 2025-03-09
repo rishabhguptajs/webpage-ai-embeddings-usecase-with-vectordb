@@ -21,34 +21,45 @@ chromaClient.heartbeat();
 const WEB_COLLECTION = `WEB_SCRAPED_DATA_COLLECTION-1`
 
 async function scrapeWebpage(url){
-    const { data } = await axios.get(url);
-    const $ = cheerio.load(data);
-    
-    const pageHead = $('head').html();
-    const pageTitle = $('title').text();
-    const pageBody = $('body').html();
+    try {
+        const { data } = await axios.get(url);
+        const $ = cheerio.load(data);
+        
+        const pageHead = $('head').html();
+        const pageTitle = $('title').text();
+        const pageBody = $('body').html();
 
-    const internalLinks = [];
-    const externalLinks = [];
+        const internalLinks = new Set();
+        const externalLinks = new Set();
 
-    $('a').each((_, el) => {
-        const link = $(el).attr('href');
+        $('a').each((_, el) => {
+            const link = $(el).attr('href');
 
-        if(link === '/') return;
+            if(link === '/') return;
 
-        if(link.startsWith('http') || link.startsWith('https')){
-            externalLinks.push(link);
-        } else {
-            internalLinks.push(link);
+            if(link.startsWith('http') || link.startsWith('https')){
+                externalLinks.add(link);
+            } else {
+                internalLinks.add(link);
+            }
+        })
+        
+        return {
+            head: pageHead,
+            title: pageTitle,
+            body: pageBody,
+            internalLinks: Array.from(internalLinks),
+            externalLinks: Array.from(externalLinks),
         }
-    })
-
-    return {
-        head: pageHead,
-        title: pageTitle,
-        body: pageBody,
-        internalLinks,
-        externalLinks
+    } catch (error) {
+        console.error(`Error scraping ${url}`);
+        return {
+            head: '',
+            title: '',
+            body: '',
+            internalLinks: [],
+            externalLinks: [],
+        };
     }
 }
 
@@ -84,23 +95,41 @@ function chunkText(text, size) {
 }
 
 async function ingest(url = ''){
-    console.log(`Ingesting ${url}`);
+    console.log(`🌟 Ingesting ${url}`);
     const { head, body, internalLinks } = await scrapeWebpage(url);
 
     const headEmbedding = await generateVectorEmbeddings({ text: head });
     await insertIntoDB({ embedding: headEmbedding, url });
 
-    const bodyChunks = chunkText(body, 2000);
+    const bodyChunks = chunkText(body, 1000);
 
     for(const chunk of bodyChunks){
-        const bodyEmbedding = await generateVectorEmbeddings({ text: chunk });
+        const bodyEmbedding = await generateVectorEmbeddings({ text: chunk });        
         await insertIntoDB({ embedding: bodyEmbedding, url, head, body: chunk });
     }
 
-    for(const link of internalLinks){
-        const _url = `${url}${link}`;
-        await ingest()
-    }
+    // for(const link of internalLinks){
+    //     const _url = `${url}${link}`;
+    //     await ingest(_url);     
+    // }
+
+    console.log(`🚀 Ingesting Success ${url}`);
 }
 
-scrapeWebpage('https://rishabhguptajs.vercel.app').then(console.log)
+async function chat(question = ''){
+    const questionEmbedding = await generateVectorEmbeddings({ text: question });
+
+    const collection = await chromaClient.getOrCreateCollection({
+        name: WEB_COLLECTION,
+    });
+
+    const collectionResult = await collection.query({
+        queryEmbeddings: [questionEmbedding],
+        nResults: 3,
+    });
+
+    const body = collectionResult.metadatas.map((e) => e);
+    console.log(body);
+}
+
+chat('Who is Rishabh');
